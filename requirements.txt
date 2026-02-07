@@ -1,6 +1,5 @@
 streamlit
-paddleocr==2.7.0.2
-paddlepaddle
+easyocr
 opencv-contrib-python-headless
 Pillow
 numpy
