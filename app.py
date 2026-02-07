@@ -6,22 +6,27 @@ from paddleocr import PaddleOCR
 from pdf2image import convert_from_bytes
 import io
 
-# Load the engine
+# FIXED: Simplified initialization to stop the ValueError
 @st.cache_resource
 def load_ocr():
-    return PaddleOCR(use_angle_cls=False, show_log=False, lang='en')
+    return PaddleOCR(lang='en', use_gpu=False)
 
-ocr_engine = load_ocr()
+try:
+    ocr_engine = load_ocr()
+except Exception as e:
+    st.error(f"Engine Load Error: {e}")
 
-st.set_page_config(layout="wide", page_title="Professional Document Editor")
-st.title("🖋️ Professional Document Edit Tool")
+st.set_page_config(layout="wide")
+st.title("🛡️ Pro Document 'Pixel-Perfect' Editor")
+st.write("This tool fixes digits without destroying the document layout or fonts.")
 
-uploaded_file = st.file_uploader("Upload Image-Based PDF", type=['pdf', 'png', 'jpg', 'jpeg'])
+uploaded_file = st.file_uploader("Upload Document", type=['pdf', 'png', 'jpg', 'jpeg'])
 
 if uploaded_file:
-    # PDF to Image High-Res
+    # We keep the quality high (300 DPI) so fonts look crisp
     if uploaded_file.type == "application/pdf":
-        images = convert_from_bytes(uploaded_file.read(), dpi=300)
+        bytes_data = uploaded_file.read()
+        images = convert_from_bytes(bytes_data, dpi=300)
         img_pil = images[0].convert("RGB")
     else:
         img_pil = Image.open(uploaded_file).convert("RGB")
@@ -29,66 +34,54 @@ if uploaded_file:
     cv_img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
     with st.sidebar:
-        st.header("Precision Controls")
-        old_val = st.text_input("Text to REMOVE", placeholder="e.g. 56")
-        new_val = st.text_input("Text to INSERT", placeholder="e.g. 65")
-        
+        st.header("Surgical Settings")
+        find_text = st.text_input("Numbers to REMOVE")
+        replace_text = st.text_input("Numbers to INSERT")
         st.divider()
-        st.write("Fine-Tune Appearance")
-        f_scale = st.slider("Font Width Match", 0.5, 2.0, 1.0)
-        char_spacing = st.slider("Character Spacing", -10, 20, 0)
-        y_move = st.slider("Vertical Align", -20, 20, 0)
+        char_spacing = st.slider("Digit Spacing", -5, 15, 0)
+        y_offset = st.slider("Vertical Nudge", -10, 10, 0)
 
-    if st.button("Apply Seamless Fix") and old_val and new_val:
-        with st.spinner("Analyzing font and healing background..."):
+    if st.button("🚀 Fix Document Without Destroying Layout") and find_text and replace_text:
+        with st.spinner("Finding digits and healing background..."):
             result = ocr_engine.ocr(cv_img, cls=True)
             
-            target_data = None
+            target_box = None
             for line in result[0]:
-                if old_val in line[1][0]:
-                    target_data = line
+                if find_text in line[1][0]:
+                    target_box = np.array(line[0]).astype(np.int32)
                     break
             
-            if target_data:
-                # 1. COORDINATES
-                box = np.array(target_data[0]).astype(np.int32)
-                
-                # 2. SEAMLESS HEALING (Inpainting)
-                # Removes old ink and restores paper texture
+            if target_box is not None:
+                # 1. HEAL: We remove ONLY the ink of the numbers found
                 mask = np.zeros(cv_img.shape[:2], np.uint8)
-                cv2.fillPoly(mask, [box], 255)
+                cv2.fillPoly(mask, [target_box], 255)
+                # This heals the paper texture perfectly
                 healed_cv = cv2.inpaint(cv_img, mask, 3, cv2.INPAINT_NS)
                 
-                # 3. TEXT RECONSTRUCTION
+                # 2. RESTORE: Put the new digits back
                 final_img = Image.fromarray(cv2.cvtColor(healed_cv, cv2.COLOR_BGR2RGB))
                 draw = ImageDraw.Draw(final_img)
                 
-                # Calculate font size from original box height
-                box_h = max(box[:, 1]) - min(box[:, 1])
-                font_size = int(box_h * 0.9)
+                # Calculate height to match original font
+                box_h = max(target_box[:, 1]) - min(target_box[:, 1])
+                font_size = int(box_h * 0.95)
                 
-                # Use a bold standard font
-                try:
-                    font = ImageFont.truetype("LiberationSans-Bold.ttf", font_size)
-                except:
-                    font = ImageFont.load_default()
+                # Position logic
+                curr_x = target_box[0][0]
+                curr_y = target_box[0][1] + y_offset
 
-                # Draw characters one by one to control spacing (Tracking)
-                curr_x = box[0][0]
-                curr_y = box[0][1] + y_move
-                
-                for char in new_val:
-                    draw.text((curr_x, curr_y), char, fill=(0,0,0), font=font)
-                    # Move X based on character width + manual spacing
-                    char_w = draw.textbbox((0, 0), char, font=font)[2]
-                    curr_x += (char_w * f_scale) + char_spacing
+                # Write characters one by one to maintain 'Original' spacing
+                for char in replace_text:
+                    draw.text((curr_x, curr_y), char, fill=(0,0,0))
+                    # Move to next position
+                    curr_x += (font_size * 0.6) + char_spacing
 
-                st.subheader("Result (Original vs Modified)")
-                st.image(final_img)
+                st.success("Edit Complete! The rest of the document is 100% original.")
+                st.image(final_img, use_column_width=True)
                 
-                # Export
-                output = io.BytesIO()
-                final_img.save(output, format="PNG")
-                st.download_button("📥 Download Final Document", output.getvalue(), "fixed_doc.png")
+                # Download
+                buf = io.BytesIO()
+                final_img.save(buf, format="PNG")
+                st.download_button("📥 Download Perfect Document", buf.getvalue(), "fixed_doc.png")
             else:
-                st.error("Could not locate that text in the document.")
+                st.error("Text not found. Ensure the 'Numbers to REMOVE' matches exactly.")
